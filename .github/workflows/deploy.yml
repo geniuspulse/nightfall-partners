@@ -25,13 +25,13 @@ jobs:
 
       - name: Deploy to Vercel
         run: |
-          nohup npx vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN \
-            --scope=$VERCEL_ORG_ID > /tmp/vercel.log 2>&1 &
+          nohup npx vercel deploy --prebuilt --prod --yes --token=$VERCEL_TOKEN \
+            > /tmp/vercel.log 2>&1 &
           sleep 90
           cat /tmp/vercel.log
           URL=$(grep -oE 'https://[a-z0-9-]+\.vercel\.app' /tmp/vercel.log | tail -1)
           echo "Deployed to $URL"
-          echo "URL=$URL" >> $GITHUB_OUTPUT
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+          VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
