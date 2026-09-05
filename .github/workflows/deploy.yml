@@ -1,0 +1,37 @@
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+
+      - name: Deploy to Vercel
+        run: |
+          nohup npx vercel deploy --prebuilt --prod --token=$VERCEL_TOKEN \
+            --scope=$VERCEL_ORG_ID > /tmp/vercel.log 2>&1 &
+          sleep 90
+          cat /tmp/vercel.log
+          URL=$(grep -oE 'https://[a-z0-9-]+\.vercel\.app' /tmp/vercel.log | tail -1)
+          echo "Deployed to $URL"
+          echo "URL=$URL" >> $GITHUB_OUTPUT
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
