@@ -230,6 +230,13 @@ export default function GameRoom() {
       </div>
 
       <h2>{room.title}</h2>
+      {state.roomIndex === 0 && mission.intro && (
+        <div className="intro-panel">
+          {mission.intro.split('\n\n').map((para, idx) => (
+            <p key={idx} className="intro-text">{para}</p>
+          ))}
+        </div>
+      )}
       <p className="story">{room.story}</p>
 
       <div className="clue-card">
@@ -266,6 +273,7 @@ export default function GameRoom() {
             onChange={(e) => setCodeVal(e.target.value)}
           />
           <button className="btn-primary" onClick={submitCode}>Speak the Answer</button>
+          {i.hint && <p className="sub hint">{i.hint}</p>}
         </div>
       )}
 

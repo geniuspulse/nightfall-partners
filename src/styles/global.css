@@ -217,3 +217,13 @@ input:focus { border-color: var(--primary); }
 @media (max-width: 480px) {
   .shop-grid { grid-template-columns: 1fr; }
 }
+
+/* ── Night intro (shown above Room 1) ── */
+.intro-panel {
+  margin: 0 0 18px 0; padding: 18px 20px;
+  background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--primary);
+  border-radius: 12px;
+}
+.intro-panel .intro-text { font-size: 14.5px; line-height: 1.75; color: var(--muted); margin: 0 0 12px 0; }
+.intro-panel .intro-text:last-child { margin-bottom: 0; }
+.hint { margin-top: 10px; font-style: italic; opacity: 0.8; }
