@@ -10,7 +10,6 @@ export default function Landing() {
   const [password, setPassword] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState(null);
-  const [notice, setNotice] = useState(null);
 
   React.useEffect(() => {
     if (session) navigate('/lobby');
@@ -25,7 +24,8 @@ export default function Landing() {
     } else {
       const { error } = await signUp(email, password, name || 'Wanderer');
       if (error) setError(error.message);
-      else setNotice('Check your email to confirm your account, then sign in.');
+      // No email verification — autoconfirm is on, so a session
+      // comes back immediately and the effect above navigates to /lobby.
     }
   };
 
@@ -47,7 +47,6 @@ export default function Landing() {
             <input type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} required />
             <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} required />
             {error && <div className="form-error">{error}</div>}
-            {notice && <div className="form-notice">{notice}</div>}
             <button className="btn-primary" type="submit">
               {mode === 'signin' ? 'Enter the Night' : 'Create Account'}
             </button>
