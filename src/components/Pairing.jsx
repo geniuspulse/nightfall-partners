@@ -16,6 +16,7 @@ export default function Pairing() {
   const [myCode, setMyCode] = useState(null);
   const [error, setError] = useState(null);
   const [waiting, setWaiting] = useState(false);
+  const [joining, setJoining] = useState(false);
 
   useEffect(() => {
     if (couple?.player_a && couple?.player_b) navigate('/missions');
@@ -57,15 +58,22 @@ export default function Pairing() {
 
   const joinWithCode = async () => {
     setError(null);
-    const { data, error: e } = await supabase
-      .from('couples')
-      .update({ player_b: session.user.id })
-      .eq('invite_code', code.trim().toUpperCase())
-      .is('player_b', null)
-      .select()
-      .maybeSingle();
-    if (e) { setError(e.message); return; }
-    if (!data) { setError('No open invitation with that code. Check with your partner.'); return; }
+    const trimmed = code.trim().toUpperCase();
+    if (trimmed.length !== 6) {
+      setError('Enter the full 6-letter code your partner shared with you.');
+      return;
+    }
+    setJoining(true);
+    const { data, error: e } = await supabase.rpc('join_couple', { invite_code_param: trimmed });
+    setJoining(false);
+    if (e) {
+      if (e.message?.includes('INVALID_OR_CLOSED_INVITE')) {
+        setError('That code is wrong, already used, or it\'s your own invite. Double-check with your partner.');
+      } else {
+        setError(e.message);
+      }
+      return;
+    }
     setCouple(data);
     navigate('/missions');
   };
@@ -89,14 +97,26 @@ export default function Pairing() {
       )}
       {mode === 'join' && (
         <div className="invite-box">
+          <label className="field-label" htmlFor="invite-code-field">Enter your partner's 6-letter code</label>
           <input
+            id="invite-code-field"
             className="code-input"
-            placeholder="6-letter code"
+            type="text"
+            inputMode="text"
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="characters"
+            spellCheck={false}
+            autoFocus
+            placeholder="ABCDEF"
             maxLength={6}
             value={code}
-            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            onChange={(e) => setCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ''))}
+            onKeyDown={(e) => { if (e.key === 'Enter') joinWithCode(); }}
           />
-          <button className="btn-primary" onClick={joinWithCode}>Join Bond</button>
+          <button className="btn-primary" onClick={joinWithCode} disabled={joining}>
+            {joining ? 'Joining…' : 'Join Bond'}
+          </button>
           {error && <div className="form-error">{error}</div>}
         </div>
       )}

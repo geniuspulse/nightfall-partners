@@ -95,7 +95,15 @@ input:focus { border-color: var(--primary); }
   font-family: 'Cinzel', serif; font-size: 42px; letter-spacing: 12px;
   color: var(--primary-soft); margin: 16px 0; text-shadow: 0 0 24px rgba(201,164,76,0.4);
 }
-.code-input { text-align: center; font-size: 20px; letter-spacing: 4px; margin-bottom: 12px; }
+.field-label { display: block; text-align: left; font-size: 13px; color: var(--muted); margin-bottom: 8px; font-weight: 600; }
+.code-input {
+  display: block; width: 100%; text-align: center; font-size: 26px; font-weight: 700;
+  letter-spacing: 8px; margin-bottom: 14px; text-transform: uppercase;
+  background: var(--card); border: 2px solid var(--primary); border-radius: 12px;
+  padding: 16px 10px; color: var(--primary-soft); caret-color: var(--primary-soft);
+}
+.code-input::placeholder { color: var(--border); letter-spacing: 8px; }
+.code-input:focus { border-color: var(--primary-soft); box-shadow: 0 0 0 3px rgba(201,164,76,0.2); }
 
 /* ── Lobby ── */
 .lobby { min-height: 80vh; display: flex; flex-direction: column; }
