@@ -43,13 +43,20 @@ export default function WeaponSystem({
         if (r.ok) pushAmmo();
       }
     };
-    const md = (e) => {
-      // only when clicking the canvas area itself
+    const pd = (e) => {
+      // only a real mouse clicking the canvas itself; touch drags the camera
+      if (e.pointerType !== 'mouse') return;
       if (e.target?.tagName === 'CANVAS') fireReq.current = true;
     };
+    const nfFire = () => { fireReq.current = true; };
     window.addEventListener('keydown', kd);
-    window.addEventListener('mousedown', md);
-    return () => { window.removeEventListener('keydown', kd); window.removeEventListener('mousedown', md); };
+    window.addEventListener('pointerdown', pd);
+    window.addEventListener('nf-fire', nfFire);
+    return () => {
+      window.removeEventListener('keydown', kd);
+      window.removeEventListener('pointerdown', pd);
+      window.removeEventListener('nf-fire', nfFire);
+    };
   }, []);
 
   const fireNow = (now) => {

@@ -34,6 +34,7 @@ import { loadMissionProgress, saveMissionProgress } from '../game/engine/persist
 import ForestWorld, { terrainHeight } from './world.jsx';
 import Avatar from './Avatar.jsx';
 import { useInput } from './useInput.js';
+import TouchControls from './TouchControls.jsx';
 import { useInteraction, FOREST_ZONES, zonePosition } from './interactions.jsx';
 
 const UP = new THREE.Vector3(0, 1, 0);
@@ -49,17 +50,21 @@ function shortest(from, to) {
 }
 
 // ── Local player: input → motion → world transform + broadcast ──
-function PlayerController({ motion, keysRef, cameraRef, groupRef, onStep, lockRef }) {
+function PlayerController({ motion, keysRef, cameraRef, groupRef, onStep, lockRef, touchVecRef }) {
   const tmp = useMemo(() => new THREE.Vector3(), []);
   useFrame((_, dt) => {
     const k = lockRef?.current ? {} : keysRef.current; // downed/dead players cannot move
+    const j = lockRef?.current ? { x: 0, y: 0 } : (touchVecRef?.current ?? { x: 0, y: 0 });
     const m = motion.current;
-    tmp.set((k.r ? 1 : 0) - (k.l ? 1 : 0), 0, (k.b ? 1 : 0) - (k.f ? 1 : 0));
-    const moving = tmp.lengthSq() > 0;
+    // keyboard is digital; the joystick is analog and camera-relative
+    tmp.set((k.r ? 1 : 0) - (k.l ? 1 : 0) + j.x, 0, (k.b ? 1 : 0) - (k.f ? 1 : 0) - j.y);
+    const mag = Math.min(1, tmp.length());
+    const moving = mag > 0.001;
     if (moving) {
       tmp.normalize().applyAxisAngle(UP, cameraRef.current.angle);
     }
-    const targetSpeed = moving ? (k.run ? RUN_SPEED : WALK_SPEED) : 0;
+    const run = k.run || j.run;
+    const targetSpeed = moving ? (run ? RUN_SPEED * (j.run ? Math.max(0.6, mag) : 1) : WALK_SPEED * mag) : 0;
     m.speed += (targetSpeed - m.speed) * Math.min(1, dt * 9);
 
     m.x += tmp.x * m.speed * dt;
@@ -304,6 +309,7 @@ export default function ForestGame() {
   const respawnTimers = useRef({});
   const cinemaRef = useRef(null);
   cinemaRef.current = cinema;
+  const touchVecRef = useRef({ x: 0, y: 0, run: false });
   const prevHpRef = useRef(100);
   const prevDoneRef = useRef(new Set());
   const introShownRef = useRef(false);
@@ -839,6 +845,7 @@ export default function ForestGame() {
           groupRef={localGroup}
           onStep={onStep}
           lockRef={playerLockRef}
+          touchVecRef={touchVecRef}
         />
 
         {/* remote partner */}
@@ -892,6 +899,7 @@ export default function ForestGame() {
       />
       <DamageFlash trigger={dmgFlash} />
       <Cinema cinema={cinema} onAdvance={advanceCinema} />
+      <TouchControls vecRef={touchVecRef} />
 
       <ForestHUD
         status={status}
