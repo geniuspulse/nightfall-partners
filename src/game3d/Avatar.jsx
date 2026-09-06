@@ -58,12 +58,16 @@ export default function Avatar({ motion, name, role = 'pathfinder', health = 100
       // cloak trails behind the stride
       cloakRef.current.rotation.x = lean * 0.6 + (moving ? Math.sin(bobT.current) * 0.03 : 0);
     }
-    // lantern flicker
+    // lantern flicker (+ speaking glow: the voice lights them up)
+    const speakingBoost = m.speaking
+      ? 0.35 + Math.sin(bobT.current * 14) * 0.2
+      : 0;
     if (lanternRef.current) {
       const f = 0.85 + Math.sin(bobT.current * 3.7) * 0.08 + Math.sin(bobT.current * 8.3) * 0.07;
-      lanternRef.current.intensity = 6 * f;
+      lanternRef.current.intensity = 6 * f * (1 + speakingBoost);
     }
-    if (eyeRef.current) eyeRef.current.emissiveIntensity = 1.4 + Math.sin(bobT.current * 0.9) * 0.25;
+    if (eyeRef.current) eyeRef.current.emissiveIntensity =
+      1.4 + Math.sin(bobT.current * 0.9) * 0.25 + speakingBoost * 2;
   });
 
   return (

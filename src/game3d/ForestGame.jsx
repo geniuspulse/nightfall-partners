@@ -14,6 +14,7 @@ import { useAuth } from '../lib/AuthContext';
 import { roleForUser } from '../lib/gameEngine';
 import { supabase } from '../api/supabaseClient';
 import { SessionChannel, createRemoteAvatar } from '../lib/realtime/sessionManager';
+import { VoiceManager } from './voice.js';
 import ForestWorld, { terrainHeight } from './world.jsx';
 import Avatar from './Avatar.jsx';
 import { useInput } from './useInput.js';
@@ -71,7 +72,7 @@ function PlayerController({ motion, keysRef, cameraRef, groupRef, onStep }) {
 }
 
 // ── Remote partner: interpolated network avatar ──
-function RemotePlayer({ avatarRef, motion, name, role, online }) {
+function RemotePlayer({ avatarRef, motion, name, role, online, speakingRef }) {
   const groupRef = useRef();
   useFrame(() => {
     const av = avatarRef.current;
@@ -85,6 +86,7 @@ function RemotePlayer({ avatarRef, motion, name, role, online }) {
     const anim = newest?.anim ?? 'idle';
     motion.current.state = anim;
     motion.current.speed = anim === 'run' ? RUN_SPEED : anim === 'walk' ? WALK_SPEED : 0;
+    motion.current.speaking = speakingRef ? speakingRef.current : false;
   });
   if (!online) return null;
   return (
@@ -118,6 +120,59 @@ const STATUS_META = {
   disconnected: { label: 'Disconnected', color: '#8b93a5' },
   reconnecting: { label: 'Reconnecting…', color: '#e08a4a' },
 };
+
+const VOICE_META = {
+  off: { label: 'Voice off', color: '#8b93a5' },
+  requesting: { label: 'Requesting mic…', color: '#e0b74a' },
+  waiting: { label: 'Voice: waiting for partner…', color: '#e0b74a' },
+  connecting: { label: 'Voice: connecting…', color: '#e0b74a' },
+  connected: { label: 'Voice: connected', color: '#7fd88f' },
+  reconnecting: { label: 'Voice: reconnecting…', color: '#e08a4a' },
+  error: { label: 'Voice error', color: '#e0645c' },
+};
+
+function VoiceBar({ voice, onConnect, onDisconnect, onToggleMute }) {
+  const meta = VOICE_META[voice.state] ?? VOICE_META.off;
+  const on = voice.state !== 'off' && voice.state !== 'error';
+
+  return (
+    <div className="fh-voice">
+      <div className="fv-row">
+        <span className="fh-dot" style={{ background: meta.color }} />
+        <span className="fv-status">{meta.label}</span>
+        {voice.state === 'error' && voice.errorReason === 'permission' && (
+          <span className="fv-err"> — microphone permission was denied</span>
+        )}
+        {voice.state === 'error' && voice.errorReason === 'peer' && (
+          <span className="fv-err"> — couldn't reach your partner, try again</span>
+        )}
+      </div>
+
+      {voice.state === 'off' || voice.state === 'error' ? (
+        <button className="fv-btn fv-btn-primary" onClick={onConnect}>
+          🎤 Connect voice
+        </button>
+      ) : (
+        <div className="fv-controls">
+          <button
+            className={'fv-btn' + (voice.muted ? ' fv-btn-muted' : '')}
+            onClick={onToggleMute}
+            title={voice.muted ? 'Unmute' : 'Mute'}
+          >
+            {voice.muted ? '🔇 Muted' : voice.speaking ? '🗣️ Speaking' : '🔊 Mic live'}
+          </button>
+          <span className="fv-partner-status">
+            {voice.peerMuted ? 'Partner muted'
+              : voice.peerSpeaking ? '🟢 Partner speaking…'
+              : on && voice.state === 'connected' ? 'Partner can hear you'
+              : ''}
+          </span>
+          <button className="fv-btn fv-btn-danger" onClick={onDisconnect}>✕</button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ForestHUD({ status, partnerName, solo, prompt, examine, onCloseExamine }) {
   const meta = STATUS_META[status] ?? STATUS_META.connecting;
@@ -177,7 +232,12 @@ export default function ForestGame() {
   const [activated, setActivated] = useState({});
   const [status, setStatus] = useState('connecting');
   const [partnerName, setPartnerName] = useState('');
+  const [voice, setVoice] = useState({ state: 'off' });
   const solo = !couple?.player_b;
+
+  const voiceRef = useRef(null);
+  const audioElRef = useRef(null);
+  const partnerSpeakingRef = useRef(false);
 
   // Interaction system (kind registry + proximity + HUD state)
   const handlersRef = useRef({});
@@ -259,8 +319,20 @@ export default function ForestGame() {
             avatarRef.current?.setSnapshot(m);
           } else if (m?.zone !== undefined) {
             handlersRef.current.remoteWorldState?.(m);
+          } else if (typeof m?.kind === 'string' && m.kind.startsWith('voice')) {
+            voiceRef.current?.handleSignal(m);
           }
         });
+
+        // voice: P2P WebRTC, this channel is signaling-only
+        const vm = new VoiceManager({
+          selfId: session.user.id,
+          partnerId: partnerId,
+          channel: chan,
+        });
+        vm.setAudioElement(audioElRef.current);
+        vm.onState(setVoice);
+        voiceRef.current = vm;
 
         chanRef.current = chan;
         await chan.connect();
@@ -273,6 +345,8 @@ export default function ForestGame() {
 
     return () => {
       disposed = true;
+      try { voiceRef.current?.disconnect(); } catch {}
+      voiceRef.current = null;
       chanRef.current?.disconnect();
       chanRef.current = null;
     };
@@ -320,6 +394,7 @@ export default function ForestGame() {
           name={partnerName || 'Your partner'}
           role={partnerRole}
           online={status === 'online'}
+          speakingRef={partnerSpeakingRef}
         />
 
         <CameraRig motion={localMotion} cameraRef={cameraRef} />
@@ -332,6 +407,16 @@ export default function ForestGame() {
         prompt={promptView}
         examine={examine}
         onCloseExamine={() => setExamine(null)}
+      />
+
+      {/* remote voice element — P2P audio, never stored */}
+      <audio ref={audioElRef} autoPlay playsInline style={{ display: 'none' }} />
+
+      <VoiceBar
+        voice={voice}
+        onConnect={() => voiceRef.current?.connect()}
+        onDisconnect={() => voiceRef.current?.disconnect()}
+        onToggleMute={() => voiceRef.current?.toggleMute()}
       />
 
       <button className="fh-exit" onClick={() => navigate('/lobby')}>✕ Leave the forest</button>
