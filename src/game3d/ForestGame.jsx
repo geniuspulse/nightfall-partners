@@ -15,6 +15,14 @@ import { roleForUser } from '../lib/gameEngine';
 import { supabase } from '../api/supabaseClient';
 import { SessionChannel, createRemoteAvatar } from '../lib/realtime/sessionManager';
 import { VoiceManager } from './voice.js';
+import MissionHUD from './MissionHUD.jsx';
+import { pathX } from './world.jsx';
+import {
+  createMissionState, report as engineReport, deserialize,
+  availableChoices, makeChoice as engineMakeChoice, getProgress,
+} from '../game/engine/MissionEngine.js';
+import { FIRST_LIGHT } from '../game/missions/first-light.js';
+import { loadMissionProgress, saveMissionProgress } from '../game/engine/persistence.js';
 import ForestWorld, { terrainHeight } from './world.jsx';
 import Avatar from './Avatar.jsx';
 import { useInput } from './useInput.js';
@@ -94,6 +102,32 @@ function RemotePlayer({ avatarRef, motion, name, role, online, speakingRef }) {
       <Avatar motion={motion} name={name} role={role} health={100} />
     </group>
   );
+}
+
+// ── Mission bridge: translates gameplay into engine events ──
+function MissionBridge({ localMotion, remoteMotion, partnerOnline, onEventRef }) {
+  const hit = useRef({ lp2: false, partner: false });
+  const last = useRef(0);
+  useFrame(({ clock }) => {
+    if (clock.elapsedTime - last.current < 0.25) return; // 4Hz — cheap
+    last.current = clock.elapsedTime;
+    const p = localMotion.current;
+    if (!hit.current.lp2) {
+      const lp2x = pathX(-22) + 1.9;
+      if (Math.hypot(p.x - lp2x, p.z + 22) < 7) {
+        hit.current.lp2 = true;
+        onEventRef.current?.({ kind: 'ZONE_ENTERED', zone: 'lp-2-approach' });
+      }
+    }
+    if (!hit.current.partner && partnerOnline) {
+      const rp = remoteMotion.current;
+      if (Math.hypot(p.x - rp.x, p.z - rp.z) < 6) {
+        hit.current.partner = true;
+        onEventRef.current?.({ kind: 'PARTNER_MET' });
+      }
+    }
+  });
+  return null;
 }
 
 // ── Cinematic third-person camera ──
@@ -233,11 +267,21 @@ export default function ForestGame() {
   const [status, setStatus] = useState('connecting');
   const [partnerName, setPartnerName] = useState('');
   const [voice, setVoice] = useState({ state: 'off' });
+  const [missionSnap, setMissionSnap] = useState(null);
+  const [showChoice, setShowChoice] = useState(false);
   const solo = !couple?.player_b;
 
   const voiceRef = useRef(null);
   const audioElRef = useRef(null);
   const partnerSpeakingRef = useRef(false);
+
+  // ── Mission engine (Phase 3): host-authoritative, data-driven ──
+  const partnerId = couple?.player_a === session?.user?.id
+    ? couple?.player_b : couple?.player_a;
+  const isHost = !partnerId || session?.user?.id < partnerId;
+  const missionRef = useRef(null);      // host: live engine state
+  const missionDbIdRef = useRef(null);
+  const missionEventRef = useRef(null); // stable bridge callback
 
   // Interaction system (kind registry + proximity + HUD state)
   const handlersRef = useRef({});
@@ -254,7 +298,96 @@ export default function ForestGame() {
     if (msg?.zone) setActivated((a) => ({ ...a, [msg.zone]: !!msg.on }));
   };
 
-  const { keysRef, cameraRef } = useInput({ onInteract: handleInteract, containerRef });
+  // snapshot for HUDs (both players render from this shape)
+  const buildSnapshot = () => {
+    const st = missionRef.current;
+    if (!st) return null;
+    const objectives = FIRST_LIGHT.objectives.map((o) => {
+      const os = st.objectives[o.id];
+      return {
+        id: o.id, title: o.title, description: o.description ?? '',
+        progress: os.progress, requiredProgress: os.requiredProgress,
+        completed: os.completed, required: os.required,
+        available: !os.completed && os.requires.every((r) => st.objectives[r]?.completed),
+      };
+    });
+    const choice = availableChoices(st, FIRST_LIGHT)[0] ?? null;
+    return {
+      title: FIRST_LIGHT.title, chapter: FIRST_LIGHT.chapter, status: st.status,
+      objectives,
+      mainObjective: objectives.find((o) => !o.completed && o.available) ?? null,
+      choice: choice
+        ? { id: choice.id, prompt: choice.prompt,
+            options: choice.options.map(({ id, label, description }) => ({ id, label, description })) }
+        : null,
+      complete: st.status === 'complete'
+        ? { rewards: FIRST_LIGHT.rewards, nextMission: FIRST_LIGHT.nextMission } : null,
+    };
+  };
+
+  const broadcastMission = () => {
+    const snap = buildSnapshot();
+    setMissionSnap(snap);
+    chanRef.current?.send('mission-state', { missionState: snap });
+  };
+
+  const persistMission = () => {
+    const st = missionRef.current;
+    if (!st || !couple?.id || !missionDbIdRef.current) return;
+    const prog = getProgress(st);
+    const secrets = Object.values(st.objectives).filter((o) => !o.required && o.completed).length;
+    saveMissionProgress({
+      coupleId: couple.id, missionDbId: missionDbIdRef.current, state: st,
+      progress: { done: prog.done, secrets }, complete: st.status === 'complete',
+    }).catch((err) => console.warn('mission save failed:', err.message));
+  };
+
+  const applyEngineEvents = (events) => {
+    if (!missionRef.current) return;
+    for (const e of events) {
+      if (e.type === 'CHECKPOINT_CAPTURED' || e.type === 'MISSION_COMPLETE') persistMission();
+      if (e.type === 'CHOICE_MADE') setShowChoice(false);
+    }
+    broadcastMission();
+  };
+
+  const reportMissionEvent = (gameEvent) => {
+    if (isHost) {
+      applyEngineEvents(engineReport(missionRef.current, FIRST_LIGHT, gameEvent));
+    } else {
+      chanRef.current?.send('mission-event', { gameEvent });
+    }
+  };
+  missionEventRef.current = reportMissionEvent;
+
+  const chooseStoryOption = (choiceId, optionId) => {
+    if (isHost) {
+      applyEngineEvents(engineMakeChoice(missionRef.current, FIRST_LIGHT, choiceId, optionId));
+    } else {
+      chanRef.current?.send('mission-choice', { choiceId, optionId });
+    }
+  };
+
+  const restartMission = () => {
+    if (!isHost) return;
+    missionRef.current = createMissionState(FIRST_LIGHT);
+    persistMission();
+    broadcastMission();
+  };
+
+  // interactions feed the engine (examine → INVESTIGATED, activate → ACTIVATED)
+  const promptTrackRef = useRef(null);
+  useEffect(() => { promptTrackRef.current = interaction.prompt; }, [interaction.prompt]);
+  const interactRef = useRef(null);
+  interactRef.current = () => {
+    const z = promptTrackRef.current;
+    if (z?.kind === 'examine') reportMissionEvent({ kind: 'INVESTIGATED', zone: z.id, id: z.id });
+    if (z?.kind === 'activate') reportMissionEvent({ kind: 'ACTIVATED', zone: z.id, id: z.id });
+    if (z?.id === 'well-mouth' && missionSnap?.choice) { setShowChoice(true); return; }
+    interaction.handleInteract();
+  };
+
+  const { keysRef, cameraRef } = useInput({ onInteract: () => interactRef.current?.(), containerRef });
 
   // Broadcast local transform (throttled to 12Hz inside sendTransform)
   const onStep = (m) => {
@@ -312,6 +445,7 @@ export default function ForestGame() {
           const partnerPres = Object.values(state).find((p) => p.pid === partnerId);
           if (partnerPres?.name) setPartnerName(partnerPres.name);
           setStatus(partnerPresent ? 'online' : 'disconnected');
+          if (partnerPresent && isHost) broadcastMission(); // sync the newcomer
         });
 
         chan.onMessage((m) => {
@@ -321,6 +455,16 @@ export default function ForestGame() {
             handlersRef.current.remoteWorldState?.(m);
           } else if (typeof m?.kind === 'string' && m.kind.startsWith('voice')) {
             voiceRef.current?.handleSignal(m);
+          } else if (m?.gameEvent) {
+            // partner's gameplay → host engine
+            if (isHost) applyEngineEvents(engineReport(missionRef.current, FIRST_LIGHT, m.gameEvent));
+          } else if (m?.missionChoice) {
+            if (isHost) applyEngineEvents(
+              engineMakeChoice(missionRef.current, FIRST_LIGHT, m.missionChoice.choiceId, m.missionChoice.optionId)
+            );
+          } else if (m?.missionState) {
+            // host's engine → partner HUD
+            if (!isHost) setMissionSnap(m.missionState);
           }
         });
 
@@ -350,6 +494,31 @@ export default function ForestGame() {
       chanRef.current?.disconnect();
       chanRef.current = null;
     };
+  }, [session?.user?.id, couple?.id]);
+
+  // load-or-create engine state (host only; clients receive broadcasts)
+  useEffect(() => {
+    if (!session?.user || !couple) return;
+    let disposed = false;
+    (async () => {
+      const { data: missionRow } = await supabase
+        .from('missions').select('id').eq('night_number', 0).single();
+      missionDbIdRef.current = missionRow?.id ?? null;
+      if (disposed || !isHost) return;
+      try {
+        const { state: saved } = await loadMissionProgress({
+          coupleId: couple.id, missionDbId: missionRow.id,
+        });
+        missionRef.current = saved
+          ? deserialize(saved, FIRST_LIGHT)
+          : createMissionState(FIRST_LIGHT);
+      } catch (err) {
+        console.warn('mission load failed, starting fresh:', err.message);
+        missionRef.current = createMissionState(FIRST_LIGHT);
+      }
+      broadcastMission();
+    })();
+    return () => { disposed = true; };
   }, [session?.user?.id, couple?.id]);
 
   const promptView = prompt
@@ -398,7 +567,21 @@ export default function ForestGame() {
         />
 
         <CameraRig motion={localMotion} cameraRef={cameraRef} />
+        <MissionBridge
+          localMotion={localMotion}
+          remoteMotion={remoteMotion}
+          partnerOnline={status === 'online'}
+          onEventRef={missionEventRef}
+        />
       </Canvas>
+
+      <MissionHUD
+        snap={missionSnap
+          ? { ...missionSnap, choice: showChoice ? missionSnap.choice : null,
+              onChoose: chooseStoryOption }
+          : null}
+        onRestart={restartMission}
+      />
 
       <ForestHUD
         status={status}
