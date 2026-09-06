@@ -8,7 +8,8 @@
     "build": "vite build",
     "preview": "vite preview",
     "test:voice": "esbuild tests/voice-signaling.test.mjs --bundle --platform=node --format=esm --define:import.meta.env.VITE_SUPABASE_URL='\"https://dummy.supabase.co\"' --define:import.meta.env.VITE_SUPABASE_ANON_KEY='\"dummy\"' --outfile=/tmp/voice-test.bundle.mjs && node -e \"globalThis.WebSocket=class{constructor(){}send(){}close(){}addEventListener(){}};import('/tmp/voice-test.bundle.mjs')\"",
-    "test:mission": "esbuild tests/mission-engine.test.mjs --bundle --platform=node --format=esm --outfile=/tmp/mission-test.bundle.mjs && node /tmp/mission-test.bundle.mjs"
+    "test:mission": "esbuild tests/mission-engine.test.mjs --bundle --platform=node --format=esm --outfile=/tmp/mission-test.bundle.mjs && node /tmp/mission-test.bundle.mjs",
+    "test:combat": "esbuild tests/combat-engine.test.mjs --bundle --platform=node --format=esm --outfile=/tmp/combat-test.bundle.mjs && node /tmp/combat-test.bundle.mjs"
   },
   "dependencies": {
     "@react-three/drei": "^9.117.3",

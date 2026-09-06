@@ -443,3 +443,73 @@ input:focus { border-color: var(--primary); }
   border-radius: 8px; padding: 8px 22px; font-size: 13px; cursor: pointer;
 }
 .mh-restart:hover { background: rgba(255, 236, 200, 0.1); }
+
+/* ============ COMBAT HUD (Phase 4) ============ */
+.ch-hpbars {
+  position: absolute; top: 14px; left: 50%; transform: translateX(-50%);
+  display: flex; gap: 18px; pointer-events: none; z-index: 7;
+}
+.ch-bar { display: flex; align-items: center; gap: 7px; }
+.ch-bar-name { font-size: 11px; color: #d8cfc0; letter-spacing: 0.06em; }
+.ch-bar-track {
+  width: 130px; height: 9px; border-radius: 5px;
+  background: rgba(8, 10, 14, 0.75); border: 1px solid rgba(255, 236, 200, 0.2);
+  overflow: hidden;
+}
+.ch-bar-fill { display: block; height: 100%; transition: width 0.25s; }
+.ch-downed-tag {
+  font-size: 9px; letter-spacing: 0.12em; color: #e0645c;
+  animation: fh-pulse 1.4s ease-in-out infinite;
+}
+.ch-ammo {
+  position: absolute; right: 20px; bottom: 86px; text-align: right;
+  pointer-events: none; z-index: 7;
+}
+.ch-ammo-mag { font-size: 17px; color: #ffd9a0; letter-spacing: 0.18em; }
+.ch-ammo-reserve { font-size: 11px; color: #9aa3b5; margin-top: 3px; }
+.ch-downed {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(60,8,10,0.25), rgba(20,4,6,0.55));
+  pointer-events: none; z-index: 8;
+}
+.ch-downed-card { text-align: center; max-width: 420px; padding: 20px; }
+.ch-downed-title { font-size: 26px; font-weight: 800; letter-spacing: 0.3em; color: #e0645c; }
+.ch-downed-card p { color: #d8cfc0; font-size: 13.5px; margin: 10px 0 16px; }
+.ch-bleed-track {
+  width: 240px; height: 6px; margin: 0 auto; border-radius: 3px;
+  background: rgba(255, 236, 200, 0.12); overflow: hidden;
+}
+.ch-bleed-fill { display: block; height: 100%; background: #e0645c; transition: width 1s linear; }
+.ch-revive {
+  position: absolute; bottom: 120px; left: 50%; transform: translateX(-50%);
+  text-align: center; pointer-events: none; z-index: 7; width: 240px;
+}
+.ch-revive-label { font-size: 12px; letter-spacing: 0.2em; color: #ffd9a0; margin-bottom: 6px; }
+.ch-revive-track {
+  height: 7px; border-radius: 4px; background: rgba(8,10,14,0.75);
+  border: 1px solid rgba(255,236,200,0.2); overflow: hidden;
+}
+.ch-revive-fill { display: block; height: 100%; background: #7fd88f; }
+.ch-damage-flash {
+  position: absolute; inset: 0; pointer-events: none; z-index: 8;
+  background: radial-gradient(ellipse at center, rgba(160,30,30,0) 40%, rgba(160,30,30,0.45));
+  animation: ch-flash 0.28s ease-out;
+}
+@keyframes ch-flash { from { opacity: 1; } to { opacity: 0; } }
+
+/* ============ CINEMA OVERLAY ============ */
+.cinema {
+  position: absolute; inset: 0; z-index: 9; pointer-events: auto;
+  display: flex; align-items: flex-end; justify-content: center;
+  background: rgba(3, 4, 7, 0.55); cursor: pointer;
+}
+.cinema-bar { position: absolute; left: 0; right: 0; height: 11vh; background: #04050a; }
+.cinema-top { top: 0; }
+.cinema-bottom { bottom: 0; }
+.cinema-body {
+  position: relative; margin-bottom: 14vh; text-align: center;
+  max-width: 620px; padding: 0 28px;
+}
+.cinema-label { font-size: 11px; letter-spacing: 0.34em; color: #ffd9a0; margin-bottom: 14px; }
+.cinema-text { font-size: 16px; line-height: 1.75; color: #e8e2d4; min-height: 84px; }
+.cinema-hint { font-size: 10.5px; color: #6b7484; margin-top: 18px; letter-spacing: 0.1em; }

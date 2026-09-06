@@ -16,12 +16,20 @@ import { supabase } from '../api/supabaseClient';
 import { SessionChannel, createRemoteAvatar } from '../lib/realtime/sessionManager';
 import { VoiceManager } from './voice.js';
 import MissionHUD from './MissionHUD.jsx';
+import Entity from './Entity.jsx';
+import Chapter1Props from './Chapter1Props.jsx';
+import WeaponSystem from './WeaponSystem.jsx';
+import { HpBars, AmmoCounter, DownedOverlay, RevivePrompt, DamageFlash, Cinema } from './CombatHUD.jsx';
+import {
+  createCombatState, joinCombat, spawnEnemy, tickCombat, combatSnapshot,
+  applyEnemyDamage, tickRevive, respawnPlayer,
+} from '../game/engine/combat/CombatEngine.js';
 import { pathX } from './world.jsx';
 import {
   createMissionState, report as engineReport, deserialize,
   availableChoices, makeChoice as engineMakeChoice, getProgress,
 } from '../game/engine/MissionEngine.js';
-import { FIRST_LIGHT } from '../game/missions/first-light.js';
+import { THE_HUNT } from '../game/missions/chapter1.js';
 import { loadMissionProgress, saveMissionProgress } from '../game/engine/persistence.js';
 import ForestWorld, { terrainHeight } from './world.jsx';
 import Avatar from './Avatar.jsx';
@@ -41,10 +49,10 @@ function shortest(from, to) {
 }
 
 // ── Local player: input → motion → world transform + broadcast ──
-function PlayerController({ motion, keysRef, cameraRef, groupRef, onStep }) {
+function PlayerController({ motion, keysRef, cameraRef, groupRef, onStep, lockRef }) {
   const tmp = useMemo(() => new THREE.Vector3(), []);
   useFrame((_, dt) => {
-    const k = keysRef.current;
+    const k = lockRef?.current ? {} : keysRef.current; // downed/dead players cannot move
     const m = motion.current;
     tmp.set((k.r ? 1 : 0) - (k.l ? 1 : 0), 0, (k.b ? 1 : 0) - (k.f ? 1 : 0));
     const moving = tmp.lengthSq() > 0;
@@ -80,7 +88,7 @@ function PlayerController({ motion, keysRef, cameraRef, groupRef, onStep }) {
 }
 
 // ── Remote partner: interpolated network avatar ──
-function RemotePlayer({ avatarRef, motion, name, role, online, speakingRef }) {
+function RemotePlayer({ avatarRef, motion, name, role, online, speakingRef, health = 100 }) {
   const groupRef = useRef();
   useFrame(() => {
     const av = avatarRef.current;
@@ -283,6 +291,28 @@ export default function ForestGame() {
   const missionDbIdRef = useRef(null);
   const missionEventRef = useRef(null); // stable bridge callback
 
+  // ── Combat engine (Phase 4): host-authoritative ──
+  const combatRef = useRef(null);
+  const [combatSnap, setCombatSnap] = useState({ players: {}, enemies: [] });
+  const [ammo, setAmmo] = useState(null);
+  const [cinema, setCinema] = useState(null);
+  const [dmgFlash, setDmgFlash] = useState(0);
+  const stagedRef = useRef(new Set());
+  const reviveHoldRef = useRef(false);
+  const playerLockRef = useRef(false);
+  const canFireRef = useRef(false);
+  const respawnTimers = useRef({});
+  const cinemaRef = useRef(null);
+  cinemaRef.current = cinema;
+  const prevHpRef = useRef(100);
+  const prevDoneRef = useRef(new Set());
+  const introShownRef = useRef(false);
+
+  const selfCombat = combatSnap.players[session?.user?.id];
+  const partnerCombat = combatSnap.players[partnerId];
+  playerLockRef.current = selfCombat?.state === 'downed' || selfCombat?.state === 'dead';
+  canFireRef.current = selfCombat?.state === 'alive' && !cinema;
+
   // Interaction system (kind registry + proximity + HUD state)
   const handlersRef = useRef({});
   const {
@@ -302,7 +332,7 @@ export default function ForestGame() {
   const buildSnapshot = () => {
     const st = missionRef.current;
     if (!st) return null;
-    const objectives = FIRST_LIGHT.objectives.map((o) => {
+    const objectives = THE_HUNT.objectives.map((o) => {
       const os = st.objectives[o.id];
       return {
         id: o.id, title: o.title, description: o.description ?? '',
@@ -311,9 +341,9 @@ export default function ForestGame() {
         available: !os.completed && os.requires.every((r) => st.objectives[r]?.completed),
       };
     });
-    const choice = availableChoices(st, FIRST_LIGHT)[0] ?? null;
+    const choice = availableChoices(st, THE_HUNT)[0] ?? null;
     return {
-      title: FIRST_LIGHT.title, chapter: FIRST_LIGHT.chapter, status: st.status,
+      title: THE_HUNT.title, chapter: THE_HUNT.chapter, status: st.status,
       objectives,
       mainObjective: objectives.find((o) => !o.completed && o.available) ?? null,
       choice: choice
@@ -321,7 +351,7 @@ export default function ForestGame() {
             options: choice.options.map(({ id, label, description }) => ({ id, label, description })) }
         : null,
       complete: st.status === 'complete'
-        ? { rewards: FIRST_LIGHT.rewards, nextMission: FIRST_LIGHT.nextMission } : null,
+        ? { rewards: THE_HUNT.rewards, nextMission: THE_HUNT.nextMission } : null,
     };
   };
 
@@ -349,11 +379,16 @@ export default function ForestGame() {
       if (e.type === 'CHOICE_MADE') setShowChoice(false);
     }
     broadcastMission();
+    if (isHost) stageMissionEntities();
   };
 
   const reportMissionEvent = (gameEvent) => {
     if (isHost) {
-      applyEngineEvents(engineReport(missionRef.current, FIRST_LIGHT, gameEvent));
+      if (gameEvent.kind === 'NPC_RESCUED' && combatRef.current) {
+        const child = combatRef.current.enemies.find((e) => e.id === gameEvent.id);
+        if (child) { child.state = 'gone'; pushCombatSnap(); }
+      }
+      applyEngineEvents(engineReport(missionRef.current, THE_HUNT, gameEvent));
     } else {
       chanRef.current?.send('mission-event', { gameEvent });
     }
@@ -362,7 +397,7 @@ export default function ForestGame() {
 
   const chooseStoryOption = (choiceId, optionId) => {
     if (isHost) {
-      applyEngineEvents(engineMakeChoice(missionRef.current, FIRST_LIGHT, choiceId, optionId));
+      applyEngineEvents(engineMakeChoice(missionRef.current, THE_HUNT, choiceId, optionId));
     } else {
       chanRef.current?.send('mission-choice', { choiceId, optionId });
     }
@@ -370,10 +405,203 @@ export default function ForestGame() {
 
   const restartMission = () => {
     if (!isHost) return;
-    missionRef.current = createMissionState(FIRST_LIGHT);
+    missionRef.current = createMissionState(THE_HUNT);
     persistMission();
     broadcastMission();
   };
+
+  // ── Combat: entity staging (data-driven from THE_HUNT) ──
+  const pushCombatSnap = () => {
+    if (!combatRef.current) return;
+    const snap = combatSnapshot(combatRef.current);
+    setCombatSnap(snap);
+    chanRef.current?.send('combat-state', { combatState: snap });
+  };
+
+  const objectiveAvailable = (id) => {
+    const st = missionRef.current;
+    const o = st?.objectives[id];
+    return !!o && !o.completed && o.requires.every((r) => st.objectives[r]?.completed);
+  };
+
+  const stageInitialEntities = () => {
+    const c = combatRef.current;
+    if (!c) return;
+    // the settlement's people
+    for (const npc of THE_HUNT.npcs) {
+      spawnEnemy(c, npc.def, { x: npc.at[0], z: npc.at[1] }, { id: npc.id, invulnerable: true });
+    }
+    // three deer in the meadow
+    [[-8, -46], [4, -51], [11, -58]].forEach((pos, i) => {
+      spawnEnemy(c, 'deer', { x: pos[0], z: pos[1] }, { id: `deer-${i + 1}` });
+    });
+  };
+
+  const stageMissionEntities = () => {
+    const c = combatRef.current;
+    const st = missionRef.current;
+    if (!c || !st) return;
+    for (const en of THE_HUNT.enemies) {
+      if (!en.whenObjective || objectiveAvailable(en.whenObjective)) {
+        if (!stagedRef.current.has(en.id)) {
+          stagedRef.current.add(en.id);
+          spawnEnemy(c, en.def, { x: en.at[0], z: en.at[1] }, { id: en.id });
+        }
+      }
+    }
+    // escort phase: send the survivors toward the ridge camp
+    if (objectiveAvailable('escort-survivors')) {
+      for (const e of c.enemies) {
+        const isEscort = ['woman-1', 'woman-2', 'injured-1'].includes(e.id);
+        if (isEscort && !e.marchTarget) e.marchTarget = { x: -27, z: -61 };
+      }
+    }
+  };
+
+  const checkEscort = () => {
+    const c = combatRef.current;
+    if (!c || !objectiveAvailable('escort-survivors')) return;
+    const walkers = c.enemies.filter((e) => ['woman-1', 'woman-2', 'injured-1'].includes(e.id));
+    const arrived = walkers.every((e) => Math.hypot(e.pos.x + 27, e.pos.z + 61) < 3);
+    if (walkers.length && arrived && !stagedRef.current.has('escort-done')) {
+      stagedRef.current.add('escort-done');
+      reportMissionEvent({ kind: 'ESCORT_COMPLETED', id: 'settlement-escort' });
+    }
+  };
+
+  const processCombatEvents = (events) => {
+    const c = combatRef.current;
+    if (!c) return;
+    for (const e of events) {
+      if (e.type === 'ENEMY_KILLED') {
+        reportMissionEvent({ kind: 'ENEMY_DEFEATED', id: e.enemyId });
+      }
+      if (e.type === 'PLAYER_DIED') {
+        const pid = e.pid;
+        if (!respawnTimers.current[pid]) {
+          respawnTimers.current[pid] = setTimeout(() => {
+            respawnPlayer(c, pid, {}, { hp: 50 });
+            delete respawnTimers.current[pid];
+            pushCombatSnap();
+          }, 5000);
+        }
+      }
+    }
+    if (events.length) pushCombatSnap();
+  };
+
+  const onWeaponHit = ({ enemyId, damage }) => {
+    if (!enemyId || !combatRef.current) return;
+    if (isHost) {
+      processCombatEvents(applyEnemyDamage(combatRef.current, enemyId, damage, session?.user?.id));
+    } else {
+      chanRef.current?.send('combat-hit', { enemyId, damage, byPid: session?.user?.id });
+    }
+  };
+
+  // ── Host combat sim: 10Hz tick, staging, escort, revive ──
+  useEffect(() => {
+    if (!isHost || !session?.user) return;
+    combatRef.current = createCombatState();
+    joinCombat(combatRef.current, session.user.id);
+    if (partnerId) joinCombat(combatRef.current, partnerId);
+    stageInitialEntities();
+    pushCombatSnap();
+    const iv = setInterval(() => {
+      const c = combatRef.current;
+      if (!c) return;
+      const playerPos = { [session.user.id]: { x: localMotion.current.x, z: localMotion.current.z } };
+      if (partnerId) playerPos[partnerId] = { x: remoteMotion.current.x, z: remoteMotion.current.z };
+      const events = tickCombat(c, 100, playerPos);
+      // local revive hold (host reviving the partner)
+      if (reviveHoldRef.current && partnerId) {
+        events.push(...tickRevive(c, partnerId, session.user.id, 100));
+      }
+      processCombatEvents(events);
+      checkEscort();
+      pushCombatSnap();
+    }, 100);
+    return () => { clearInterval(iv); Object.values(respawnTimers.current).forEach(clearTimeout); };
+  }, [isHost, partnerId, session?.user?.id]);
+
+  // ── Client combat: report revive hold at 10Hz ──
+  useEffect(() => {
+    if (isHost || !partnerId) return;
+    const iv = setInterval(() => {
+      if (!reviveHoldRef.current) return;
+      const m = localMotion.current, rp = remoteMotion.current;
+      if (Math.hypot(m.x - rp.x, m.z - rp.z) < 3.5) {
+        chanRef.current?.send('combat-revive-tick', { pid: partnerId, dtMs: 100 });
+      }
+    }, 100);
+    return () => clearInterval(iv);
+  }, [isHost, partnerId]);
+
+  // ── E hold = revive when the partner is down; cinema advance ──
+  useEffect(() => {
+    const kd = (e) => {
+      if (e.repeat) return;
+      if ((e.key === 'e' || e.key === 'E') && cinemaRef.current) {
+        advanceCinema();
+        return;
+      }
+      if (e.key === 'e' || e.key === 'E') {
+        const rp = remoteMotion.current, m = localMotion.current;
+        if (partnerId && partnerCombat?.state === 'downed' && Math.hypot(m.x - rp.x, m.z - rp.z) < 3.5) {
+          reviveHoldRef.current = true;
+        }
+      }
+    };
+    const ku = (e) => { if (e.key === 'e' || e.key === 'E') reviveHoldRef.current = false; };
+    window.addEventListener('keydown', kd);
+    window.addEventListener('keyup', ku);
+    return () => { window.removeEventListener('keydown', kd); window.removeEventListener('keyup', ku); };
+  }, [partnerId, partnerCombat?.state]);
+
+  const advanceCinema = () => {
+    setCinema((c) => {
+      if (!c) return null;
+      return c.index + 1 >= c.lines.length ? null : { ...c, index: c.index + 1 };
+    });
+  };
+
+  const showCinema = (label, lines) => setCinema({ label, lines, index: 0 });
+
+  // ── HUD reactions: damage flash, story cinemas, intro ──
+  useEffect(() => {
+    const hp = selfCombat?.hp ?? 100;
+    if (hp < prevHpRef.current) setDmgFlash(Date.now());
+    prevHpRef.current = hp;
+  }, [selfCombat?.hp]);
+
+  useEffect(() => {
+    if (!missionSnap) return;
+    const done = new Set(missionSnap.objectives.filter((o) => o.completed).map((o) => o.id));
+    for (const id of done) {
+      if (prevDoneRef.current.has(id)) continue;
+      prevDoneRef.current.add(id);
+      if (id === 'investigate-screams') {
+        showCinema('FROM THE KNOLL', ['The screaming stopped. That is worse.', 'Smoke stands up wrong, north past the treeline. Something is burning that was never meant to burn.']);
+      }
+      if (id === 'escort-survivors') {
+        showCinema('THE RIDGE TRAIL', ['The survivors are safe at the ridge camp. For now.', 'But the forest is moving behind you — toward the settlement.']);
+      }
+      if (id === 'defend-settlement') {
+        showCinema('THE LAST LIGHT', ['The husks burn down to nothing, like paper remembering it was once a tree.', 'The settlement is still standing. So are you.']);
+      }
+    }
+    if (!introShownRef.current && missionSnap.status === 'active') {
+      const untouched = missionSnap.objectives.every((o) => o.progress === 0 && !o.completed);
+      if (untouched) {
+        introShownRef.current = true;
+        showCinema('CHAPTER ONE — THE HUNT', [
+          THE_HUNT.intro,
+          'Walk together. Talk together — connect voice in the bar below. The forest listens.',
+          'First objective: HUNT 3 DEER. Press F to draw your bow, R to reload.',
+        ]);
+      }
+    }
+  }, [missionSnap]);
 
   // interactions feed the engine (examine → INVESTIGATED, activate → ACTIVATED)
   const promptTrackRef = useRef(null);
@@ -381,9 +609,43 @@ export default function ForestGame() {
   const interactRef = useRef(null);
   interactRef.current = () => {
     const z = promptTrackRef.current;
-    if (z?.kind === 'examine') reportMissionEvent({ kind: 'INVESTIGATED', zone: z.id, id: z.id });
-    if (z?.kind === 'activate') reportMissionEvent({ kind: 'ACTIVATED', zone: z.id, id: z.id });
-    if (z?.id === 'well-mouth' && missionSnap?.choice) { setShowChoice(true); return; }
+    if (!z) return;
+
+    // revive takes priority over everything (hold E near downed partner)
+    if (partnerId && partnerCombat?.state === 'downed') return;
+
+    // ── Chapter 1 intercepts ──
+    if (z.id === 'screams-knoll') {
+      reportMissionEvent({ kind: 'INVESTIGATED', zone: 'screams-knoll', id: 'screams-knoll' });
+      interaction.handleInteract();
+      return;
+    }
+    if (z.id.startsWith('child-')) {
+      reportMissionEvent({ kind: 'NPC_RESCUED', id: z.id }); // host cleans the entity up on receipt
+      showCinema('A CHILD IN THE RUINS', [
+        'Small hands grip yours hard enough to hurt. "You are not them," she whispers. "You are not them."',
+        'She runs for the firelight. One more soul out of the dark.',
+      ]);
+      return;
+    }
+    if (z.id === 'medicine-shelf') {
+      reportMissionEvent({ kind: 'ITEM_COLLECTED', item: 'medicine' });
+      showCinema("THE HEALER'S SATCHEL", ['Wrapped leaves, bitter roots, a jar of honey someone will be glad of. The healer never came home — but the medicine did.']);
+      return;
+    }
+    if (z.id === 'leader') {
+      const defended = missionSnap?.objectives?.find((o) => o.id === 'defend-settlement')?.completed;
+      const dlg = THE_HUNT.dialogue[defended ? 'leader-final' : 'leader-1'];
+      reportMissionEvent({ kind: 'NPC_TALKED', npc: defended ? 'leader-final' : 'leader-1' });
+      showCinema(defended ? 'MBIZI — AFTER THE FIRE' : 'MBIZI THE ELDER',
+        dlg.nodes.map((n) => n.text));
+      return;
+    }
+
+    // ── generic zones ──
+    if (z.kind === 'examine') reportMissionEvent({ kind: 'INVESTIGATED', zone: z.id, id: z.id });
+    if (z.kind === 'activate') reportMissionEvent({ kind: 'ACTIVATED', zone: z.id, id: z.id });
+    if (z.id === 'well-mouth' && missionSnap?.choice) { setShowChoice(true); return; }
     interaction.handleInteract();
   };
 
@@ -457,14 +719,31 @@ export default function ForestGame() {
             voiceRef.current?.handleSignal(m);
           } else if (m?.gameEvent) {
             // partner's gameplay → host engine
-            if (isHost) applyEngineEvents(engineReport(missionRef.current, FIRST_LIGHT, m.gameEvent));
+            if (isHost) {
+              if (m.gameEvent.kind === 'NPC_RESCUED' && combatRef.current) {
+                const child = combatRef.current.enemies.find((e) => e.id === m.gameEvent.id);
+                if (child) { child.state = 'gone'; pushCombatSnap(); }
+              }
+              applyEngineEvents(engineReport(missionRef.current, THE_HUNT, m.gameEvent));
+            }
           } else if (m?.missionChoice) {
             if (isHost) applyEngineEvents(
-              engineMakeChoice(missionRef.current, FIRST_LIGHT, m.missionChoice.choiceId, m.missionChoice.optionId)
+              engineMakeChoice(missionRef.current, THE_HUNT, m.missionChoice.choiceId, m.missionChoice.optionId)
             );
           } else if (m?.missionState) {
             // host's engine → partner HUD
             if (!isHost) setMissionSnap(m.missionState);
+          } else if (m?.combatHit) {
+            if (isHost && combatRef.current) {
+              processCombatEvents(applyEnemyDamage(combatRef.current, m.combatHit.enemyId, m.combatHit.damage, m.combatHit.byPid));
+            }
+          } else if (m?.combatReviveTick) {
+            if (isHost && combatRef.current) {
+              tickRevive(combatRef.current, m.combatReviveTick.pid, m.pid, m.combatReviveTick.dtMs);
+              pushCombatSnap();
+            }
+          } else if (m?.combatState) {
+            if (!isHost) setCombatSnap(m.combatState);
           }
         });
 
@@ -502,7 +781,7 @@ export default function ForestGame() {
     let disposed = false;
     (async () => {
       const { data: missionRow } = await supabase
-        .from('missions').select('id').eq('night_number', 0).single();
+        .from('missions').select('id').eq('night_number', THE_HUNT.dbNight).single();
       missionDbIdRef.current = missionRow?.id ?? null;
       if (disposed || !isHost) return;
       try {
@@ -510,13 +789,14 @@ export default function ForestGame() {
           coupleId: couple.id, missionDbId: missionRow.id,
         });
         missionRef.current = saved
-          ? deserialize(saved, FIRST_LIGHT)
-          : createMissionState(FIRST_LIGHT);
+          ? deserialize(saved, THE_HUNT)
+          : createMissionState(THE_HUNT);
       } catch (err) {
         console.warn('mission load failed, starting fresh:', err.message);
-        missionRef.current = createMissionState(FIRST_LIGHT);
+        missionRef.current = createMissionState(THE_HUNT);
       }
       broadcastMission();
+      if (isHost) stageMissionEntities();
     })();
     return () => { disposed = true; };
   }, [session?.user?.id, couple?.id]);
@@ -537,6 +817,10 @@ export default function ForestGame() {
         gl={{ antialias: true }}
       >
         <ForestWorld activatedZones={activated} />
+        <Chapter1Props />
+        {combatSnap.enemies.map((e) => (
+          <Entity key={e.id} e={e} />
+        ))}
         {scanner}
 
         {/* local player */}
@@ -545,7 +829,7 @@ export default function ForestGame() {
             motion={localMotion}
             name={profile?.display_name ?? 'You'}
             role={role}
-            health={100}
+            health={selfCombat?.hp ?? 100}
           />
         </group>
         <PlayerController
@@ -554,6 +838,7 @@ export default function ForestGame() {
           cameraRef={cameraRef}
           groupRef={localGroup}
           onStep={onStep}
+          lockRef={playerLockRef}
         />
 
         {/* remote partner */}
@@ -564,9 +849,18 @@ export default function ForestGame() {
           role={partnerRole}
           online={status === 'online'}
           speakingRef={partnerSpeakingRef}
+          health={partnerCombat?.hp ?? 100}
         />
 
         <CameraRig motion={localMotion} cameraRef={cameraRef} />
+        <WeaponSystem
+          localMotion={localMotion}
+          cameraRef={cameraRef}
+          enabled={!!missionSnap}
+          canFireRef={canFireRef}
+          onHit={onWeaponHit}
+          onAmmo={setAmmo}
+        />
         <MissionBridge
           localMotion={localMotion}
           remoteMotion={remoteMotion}
@@ -582,6 +876,22 @@ export default function ForestGame() {
           : null}
         onRestart={restartMission}
       />
+
+      <HpBars
+        self={selfCombat}
+        partnerName={partnerName}
+        partner={partnerCombat}
+      />
+      <AmmoCounter ammo={ammo ? { ...ammo, magTotal: 3 } : null} />
+      <DownedOverlay self={selfCombat} partnerName={partnerName} />
+      <RevivePrompt
+        show={!!partnerId && partnerCombat?.state === 'downed'
+          && Math.hypot(localMotion.current.x - remoteMotion.current.x,
+                       localMotion.current.z - remoteMotion.current.z) < 3.5}
+        progress={partnerCombat?.reviveProgress ?? 0}
+      />
+      <DamageFlash trigger={dmgFlash} />
+      <Cinema cinema={cinema} onAdvance={advanceCinema} />
 
       <ForestHUD
         status={status}
