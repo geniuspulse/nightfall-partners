@@ -9,6 +9,9 @@ export default function Quartermaster() {
   const [catalog, setCatalog] = useState([]);
   const [owned, setOwned] = useState(new Set());
   const [msg, setMsg] = useState(null);
+  const [localPoints, setLocalPoints] = useState(null);
+
+  const pointsBalance = localPoints ?? profile?.points ?? 0;
 
   useEffect(() => {
     (async () => {
@@ -23,20 +26,20 @@ export default function Quartermaster() {
 
   const buyWithPoints = async (item) => {
     setMsg(null);
-    if ((profile?.points ?? 0) < item.cost_points) {
-      setMsg({ type: 'err', text: `Not enough points — you need ◆${item.cost_points}. Complete more nights together.` });
+    // Atomic server-side purchase: balance check, deduction, grant, and
+    // ledger entry all happen in one transaction via buy_equipment RPC.
+    const { data, error } = await supabase.rpc('buy_equipment', { equipment_id_param: item.id });
+    if (error) {
+      if (error.message?.includes('INSUFFICIENT_POINTS')) {
+        setMsg({ type: 'err', text: `Not enough points — you need ◆${Number(item.cost_points).toLocaleString()}. Complete more nights together.` });
+      } else {
+        setMsg({ type: 'err', text: 'The Quartermaster frowns: ' + error.message });
+      }
       return;
     }
-    const newBalance = profile.points - item.cost_points;
-    const { error: e1 } = await supabase.from('profiles').update({ points: newBalance }).eq('id', profile.id);
-    const { error: e2 } = await supabase.from('inventory').upsert(
-      { profile_id: profile.id, equipment_id: item.id }, { onConflict: 'profile_id,equipment_id' }
-    );
-    if (e1 || e2) { setMsg({ type: 'err', text: (e1 || e2).message }); return; }
-    await supabase.from('points_ledger').insert({ profile_id: profile.id, amount: -item.cost_points, reason: `Bought ${item.name}` });
     setOwned((prev) => new Set([...prev, item.id]));
-    setMsg({ type: 'ok', text: `${item.name} added to your pack.` });
-    window.location.reload();
+    setLocalPoints(data?.points ?? null);
+    setMsg({ type: 'ok', text: `${item.name} added to your pack. ◆${Number(data?.points ?? 0).toLocaleString()} remaining.` });
   };
 
   const buyWithMoney = (item) => {
@@ -51,7 +54,7 @@ export default function Quartermaster() {
       <div className="topbar">
         <span className="brand">🏮 Quartermaster</span>
         <div className="topbar-right">
-          <span className="points">◆ {profile?.points ?? 0}</span>
+          <span className="points">◆ {Number(pointsBalance).toLocaleString()}</span>
           <button className="btn-ghost btn-sm" onClick={() => navigate('/missions')}>Back</button>
         </div>
       </div>

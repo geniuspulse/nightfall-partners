@@ -6,7 +6,7 @@ import { NIGHTS } from '../data/missions';
 import {
   roleForUser, initGameState, loadState, patchState,
   subscribeToState, resolveChoice, resolveCode, resolveSyncTap,
-  computeScore, progressRoom,
+  progressRoom,
 } from '../lib/gameEngine';
 
 export default function GameRoom() {
@@ -41,17 +41,15 @@ export default function GameRoom() {
       }
       setState(existing);
 
-      // Ensure a mission_progress row exists
+      // If previously completed, reset for replay
+      // (points were already awarded — complete_mission never double-awards)
       const { data: prog } = await supabase
         .from('mission_progress')
-        .upsert(
-          { couple_id: couple.id, mission_id: m.id },
-          { onConflict: 'couple_id,mission_id' }
-        )
-        .select()
-        .single();
+        .select('status')
+        .eq('couple_id', couple.id)
+        .eq('mission_id', m.id)
+        .maybeSingle();
       if (prog?.status === 'complete' && !existing?.finished) {
-        // Previously completed — restart for replay (score won't double-award)
         await initGameState(couple.id, m.id);
         setState(await loadState(couple.id, m.id));
       }
@@ -197,36 +195,11 @@ export default function GameRoom() {
   }, [state?.votes]);
 
   const finishMission = async (finalState) => {
-    const score = computeScore(finalState);
-    const pointsAwarded = score > 0 ? score : 50; // always something for finishing together
     await patchState(couple.id, missionId, (s) => ({ ...s, phase: 'finale', finished: true }));
-    await supabase
-      .from('mission_progress')
-      .upsert(
-        {
-          couple_id: couple.id,
-          mission_id: missionId,
-          status: 'complete',
-          objectives_done: finalState.objectivesDone,
-          secrets_found: 0,
-          sync_score: finalState.syncHits,
-          damage_taken: finalState.syncMisses,
-          score,
-          points_awarded: pointsAwarded,
-          completed_at: new Date().toISOString(),
-        },
-        { onConflict: 'couple_id,mission_id' }
-      );
-    // Award points to BOTH partners
-    for (const pid of [couple.player_a, couple.player_b].filter(Boolean)) {
-      await supabase.rpc('award_points', { target: pid, amt: pointsAwarded, why: `Night ${night} complete` }).then(async (r) => {
-        if (r.error) {
-          // Fallback: direct update
-          await supabase.from('profiles').update({ points: (await supabase.from('profiles').select('points').eq('id', pid).single()).data.points + pointsAwarded }).eq('id', pid);
-          await supabase.from('points_ledger').insert({ profile_id: pid, amount: pointsAwarded, reason: `Night ${night} complete` });
-        }
-      });
-    }
+    // Server computes the score, records progress, and awards BOTH
+    // partners atomically — clients can no longer write these tables.
+    const { error } = await supabase.rpc('complete_mission', { mission_id_param: missionId });
+    if (error) console.error('complete_mission failed:', error.message);
     navigate(`/results/${night}`);
   };
 
