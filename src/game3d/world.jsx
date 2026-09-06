@@ -95,7 +95,7 @@ function Trees() {
       if (r < 10) continue;                    // keep the spawn clearing open
       if (r > 92) continue;                   // stay inside the fog wall
       if (Math.abs(x - pathX(z)) < 3.2) continue; // don't grow on the path
-      if (t.some(([tx, tz]) => Math.hypot(tx - x, tz - z) < 3.4)) continue;
+      if (t.some((p) => Math.hypot(p.x - x, p.z - z) < 3.4)) continue;
       const scale = 0.8 + rand() * 0.9;
       const y = terrainHeight(x, z);
       const sway = rand() * Math.PI * 2;
