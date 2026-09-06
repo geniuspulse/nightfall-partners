@@ -27,7 +27,7 @@ export default class ErrorBoundary extends React.Component {
           <div className="eb-card">
             <h1>The night went dark.</h1>
             <p>Something crashed while loading. The error was:</p>
-            <pre>{String(this.state.error?.message || this.state.error)}</pre>
+            <pre>{String(this.state.error?.stack || this.state.error?.message || this.state.error)}</pre>
             <div className="eb-actions">
               <button className="btn-primary" onClick={() => window.location.reload()}>
                 Try Again
