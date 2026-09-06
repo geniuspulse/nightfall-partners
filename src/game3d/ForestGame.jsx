@@ -611,7 +611,7 @@ export default function ForestGame() {
 
   // interactions feed the engine (examine → INVESTIGATED, activate → ACTIVATED)
   const promptTrackRef = useRef(null);
-  useEffect(() => { promptTrackRef.current = interaction.prompt; }, [interaction.prompt]);
+  useEffect(() => { promptTrackRef.current = prompt; }, [prompt]);
   const interactRef = useRef(null);
   interactRef.current = () => {
     const z = promptTrackRef.current;
@@ -623,7 +623,7 @@ export default function ForestGame() {
     // ── Chapter 1 intercepts ──
     if (z.id === 'screams-knoll') {
       reportMissionEvent({ kind: 'INVESTIGATED', zone: 'screams-knoll', id: 'screams-knoll' });
-      interaction.handleInteract();
+      handleInteract();
       return;
     }
     if (z.id.startsWith('child-')) {
@@ -652,7 +652,7 @@ export default function ForestGame() {
     if (z.kind === 'examine') reportMissionEvent({ kind: 'INVESTIGATED', zone: z.id, id: z.id });
     if (z.kind === 'activate') reportMissionEvent({ kind: 'ACTIVATED', zone: z.id, id: z.id });
     if (z.id === 'well-mouth' && missionSnap?.choice) { setShowChoice(true); return; }
-    interaction.handleInteract();
+    handleInteract();
   };
 
   const { keysRef, cameraRef } = useInput({ onInteract: () => interactRef.current?.(), containerRef });
