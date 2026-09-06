@@ -26,6 +26,9 @@ export default function Lobby() {
         <button className="btn-primary" onClick={() => navigate(couple?.player_b ? '/missions' : '/pair')}>
           {couple?.player_b ? 'Choose a Night' : 'Bond With Your Partner'}
         </button>
+        <button className="btn-ghost" onClick={() => navigate('/forest')}>
+          🌲 Enter the Forest — 3D world prototype
+        </button>
       </div>
     </div>
   );

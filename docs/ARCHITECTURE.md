@@ -241,8 +241,8 @@ persisted in `checkpoint` jsonb so Night N+1 can read Night N's decisions.
 
 | Phase | Goal | Exit criteria (stability gates) |
 |---|---|---|
-| **0 — Foundation (now)** | Schema + session layer + transport proof | migration applied; two tabs see presence + ordered events; zero regressions to text game |
-| 1 — Vertical slice | One 3D room (Wren's cottage): two avatars, synced movement, one interaction, checkpoint/resume | 60 fps both clients; partner movement smooth on throttled link |
+| **0 — Foundation (done)** | Schema + session layer + transport proof | migration applied; two tabs see presence + ordered events; zero regressions to text game |
+| 1 — Vertical slice (**prototype live at /forest**) | Atmospheric forest: two avatars, synced movement, third-person camera, interaction foundation (kind registry), lantern waystones | 60 fps both clients; partner movement smooth on throttled link |
 | 2 — Voice | WebRTC audio in-session | stable call on NAT-restricted network with TURN |
 | 3 — Combat MVP | One monster + Sling (existing equipment row); damage via world_events | no desync after packet loss; death/respawn coherent |
 | 4 — Night One in 3D | Full Night One playable in 3D, text mode still works | couple completes both modes; scoring identical |

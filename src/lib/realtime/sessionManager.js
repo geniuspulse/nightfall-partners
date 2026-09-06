@@ -16,6 +16,7 @@ export const SESSION_EVENT = {
   TRANSFORM: 'transform', // peer avatar position (broadcast, fast, lossy)
   PING: 'ping',
   VOICE_SIGNAL: 'voice-signal', // Phase 2: SDP/ICE signaling
+  WORLD_STATE: 'world-state',   // shared ambience toggles (lanterns, doors, …)
 };
 
 // ── Session lifecycle (RPC-backed; server validates couple membership) ──
@@ -104,6 +105,10 @@ export class SessionChannel {
         if (payload.pid === this.self.profileId) return;
         this._listeners.message.forEach((cb) => cb(payload));
       })
+      .on('broadcast', { event: SESSION_EVENT.WORLD_STATE }, ({ payload }) => {
+        if (payload.pid === this.self.profileId) return;
+        this._listeners.message.forEach((cb) => cb(payload));
+      })
       .on(
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'world_events',
@@ -111,7 +116,12 @@ export class SessionChannel {
         (payload) => this._listeners.event.forEach((cb) => cb(payload.new))
       );
 
-    const status = await this.channel.subscribe();
+    const status = await new Promise((resolve, reject) => {
+      this.channel.subscribe((s, err) => {
+        if (s === 'SUBSCRIBED') resolve(s);
+        else if (s === 'CHANNEL_ERROR' || s === 'TIMED_OUT') reject(new Error(`subscribe failed: ${s}`));
+      });
+    });
     if (status !== 'SUBSCRIBED') throw new Error(`channel subscribe failed: ${status}`);
     await this.channel.track({
       pid: this.self.profileId,

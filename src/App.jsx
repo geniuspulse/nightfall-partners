@@ -9,6 +9,7 @@ import GameRoom from './components/GameRoom';
 import ResultsScreen from './components/ResultsScreen';
 import Quartermaster from './components/Quartermaster';
 import SyncTest from './components/dev/SyncTest';
+import ForestGame from './game3d/ForestGame';
 
 function Protected({ children }) {
   const { session, loading } = useAuth();
@@ -28,6 +29,7 @@ export default function App() {
       <Route path="/results/:night" element={<Protected><ResultsScreen /></Protected>} />
       <Route path="/shop" element={<Protected><Quartermaster /></Protected>} />
     <Route path="/dev/sync" element={<Protected><SyncTest /></Protected>} />
+    <Route path="/forest" element={<Protected><ForestGame /></Protected>} />
     </Routes>
   );
 }
